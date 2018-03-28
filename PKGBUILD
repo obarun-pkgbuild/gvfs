@@ -4,28 +4,28 @@
 
 pkgbase=gvfs
 pkgname=(gvfs gvfs-{smb,afc,gphoto2,goa,mtp,nfs,google})
-pkgver=1.34.2.1
-pkgrel=2
+pkgver=1.36.0
+pkgrel=3
 pkgdesc="Virtual filesystem implementation for GIO"
 url="https://wiki.gnome.org/Projects/gvfs"
 arch=(x86_64)
 license=(LGPL)
 depends=(avahi dconf fuse libarchive libcdio-paranoia libsoup udisks2 libsecret
          libbluray libgudev gcr psmisc)
-makedepends=(dbus intltool libgphoto2 libimobiledevice smbclient docbook-xsl
-             gtk3 libmtp gnome-online-accounts libnfs libgdata git gtk-doc python gettext)
+makedepends=(dbus libgphoto2 libimobiledevice smbclient docbook-xsl
+             gtk3 libmtp gnome-online-accounts libnfs libgdata git gtk-doc python gettext meson openssh)
 groups=(gnome)
-_commit=d988206659abcdf36838276c24963128642b626c # tags/1.34.2.1^0
+_commit=1d67d10e5bc41749c02dbca8a6cb84f6840de5cd # tags/1.36.0^0
 source=("git+https://git.gnome.org/browse/gvfs#commit=$_commit"
         gvfsd.hook)
 sha256sums=('SKIP'
             '478b9cf7b4c242959fc640dbf0cd4935f16c59b81f5828a3af102d608d7a9d72')
 validpgpkeys=('6DD4217456569BA711566AC7F06E8FDE7B45DAAC') # Eric Vidal
 
-prepare() {
-  cd $pkgbase
-  NOCONFIGURE=1 ./autogen.sh
-}
+#prepare() {
+#  cd $pkgbase
+# 
+#}
 
 pkgver() {
   cd $pkgbase
@@ -33,16 +33,28 @@ pkgver() {
 }
 
 build() {
-  cd $pkgbase
-  export PYTHONPATH="/usr/share/glib-2.0"
-  ./configure 	--prefix=/usr \
-				--sysconfdir=/etc \
-				--localstatedir=/var \
-				--disable-static \
-				--libexecdir=/usr/lib/gvfs \
-				--with-systemduserunitdir=no
-  sed -i -e 's/ -shared / -Wl,-O1,--as-needed\0/g' libtool
-  make
+ 	arch-meson $pkgbase build -D man=true \
+ 				-D deprecated_programs=true \
+ 				-D systemduserunitdir=no \
+ 				-D tmpfilesdir=no \
+ 				-D logind=false
+	ninja -C build
+}
+
+check() {
+  cd build
+  meson test
+}
+
+_split() {
+  local name="$1" src dest
+  shift
+  for src do
+    echo "$name: /usr/$src"
+    dest="$srcdir/$name/$src"
+    mkdir -p "${dest%/*}"
+    mv -T "$src" "$dest"
+  done
 }
 
 package_gvfs() {
@@ -55,84 +67,86 @@ package_gvfs() {
               'gvfs-nfs: NFS support'
               'gvfs-google: Google Drive support'
               'gtk3: Recent files support')
-
-  cd $pkgbase
-  sed -e 's/^am__append_3/#am__append_3/' \
-	  -e 's/^am__append_4/#am__append_4/' \
-      -e 's/^am__append_5/#am__append_5/' \
-      -e 's/^am__append_6/#am__append_6/' \
-      -i monitor/Makefile
-  make DESTDIR="$pkgdir" install
-
-  install -Dm644 ../gvfsd.hook "$pkgdir/usr/share/libalpm/hooks/gvfsd.hook"
+  options=(!emptydirs)
+  
+  DESTDIR="$pkgdir" ninja -C build install
+  
+  install -Dt "$pkgdir/usr/share/libalpm/hooks" -m644 *.hook
   install -d -o root -g 102 -m 750 "$pkgdir/usr/share/polkit-1/rules.d"
+  
+  cd "$pkgdir/usr"
 
-  cd "$pkgdir"
-  rm usr/lib/gvfs/gvfsd-{smb,smb-browse,afc,gphoto2,mtp,nfs,google}
-  rm usr/share/gvfs/mounts/{smb,smb-browse,afc,gphoto2,mtp,nfs,google}.mount
-  rm usr/share/glib-2.0/schemas/org.gnome.system.smb.gschema.xml
-  rm usr/share/GConf/gsettings/gvfs-smb.convert
+  _split smb \
+    lib/gvfsd-smb{,-browse} \
+    share/GConf/gsettings/gvfs-smb.convert \
+    share/glib-2.0/schemas/org.gnome.system.smb.gschema.xml \
+    share/gvfs/mounts/smb{,-browse}.mount
+
+  _split afc \
+    lib/gvfs{-afc-volume-monitor,d-afc} \
+    share/dbus-1/services/org.gtk.vfs.AfcVolumeMonitor.service \
+    share/gvfs/mounts/afc.mount \
+    share/gvfs/remote-volume-monitors/afc.monitor
+
+  _split gphoto2 \
+    lib/gvfs{-gphoto2-volume-monitor,d-gphoto2} \
+    share/dbus-1/services/org.gtk.vfs.GPhoto2VolumeMonitor.service \
+    share/gvfs/mounts/gphoto2.mount \
+    share/gvfs/remote-volume-monitors/gphoto2.monitor
+
+  _split mtp \
+    lib/gvfs{-mtp-volume-monitor,d-mtp} \
+    share/dbus-1/services/org.gtk.vfs.MTPVolumeMonitor.service \
+    share/gvfs/mounts/mtp.mount \
+    share/gvfs/remote-volume-monitors/mtp.monitor
+
+  _split goa \
+    lib/gvfs-goa-volume-monitor \
+    share/dbus-1/services/org.gtk.vfs.GoaVolumeMonitor.service \
+    share/gvfs/remote-volume-monitors/goa.monitor
+
+  _split nfs \
+    lib/gvfsd-nfs \
+    share/gvfs/mounts/nfs.mount
+
+  _split google \
+    lib/gvfsd-google \
+    share/gvfs/mounts/google.mount
 }
 
 package_gvfs-smb() {
   pkgdesc+=" (SMB/CIFS backend; Windows client)"
   depends=("gvfs=$pkgver" smbclient)
 
-  cd $pkgbase/daemon
-  install -m755 -d "$pkgdir/usr/lib/gvfs"
-  install -m755 -d "$pkgdir/usr/share/gvfs/mounts"
-
-  install -m755 .libs/gvfsd-smb{,-browse} "$pkgdir/usr/lib/gvfs/"
-  install -m644 smb{,-browse}.mount "$pkgdir/usr/share/gvfs/mounts/"
-
-  install -Dm644 org.gnome.system.smb.gschema.xml \
-    "$pkgdir/usr/share/glib-2.0/schemas/org.gnome.system.smb.gschema.xml"
-  install -Dm644 gvfs-smb.convert \
-    "$pkgdir/usr/share/GConf/gsettings/gvfs-smb.convert"
+  mv "$srcdir/smb" "$pkgdir/usr"
 }
 
 package_gvfs-afc() {
   pkgdesc+=" (AFC backend; Apple mobile devices)"
   depends=("gvfs=$pkgver" libimobiledevice usbmuxd)
 
-  cd $pkgbase/daemon
-  install -D .libs/gvfsd-afc "$pkgdir/usr/lib/gvfs/gvfsd-afc"
-  install -Dm644 afc.mount "$pkgdir/usr/share/gvfs/mounts/afc.mount"
-
-  cd "$srcdir/$pkgbase/monitor/afc"
-  make DESTDIR="$pkgdir" install
+  mv "$srcdir/afc" "$pkgdir/usr"
 }
 
 package_gvfs-gphoto2() {
   pkgdesc+=" (gphoto2 backend; PTP camera, MTP media player)"
   depends=("gvfs=$pkgver" libgphoto2)
 
-  cd $pkgbase/daemon
-  install -D .libs/gvfsd-gphoto2 "$pkgdir/usr/lib/gvfs/gvfsd-gphoto2"
-  install -Dm644 gphoto2.mount "$pkgdir/usr/share/gvfs/mounts/gphoto2.mount"
-
-  cd "$srcdir/$pkgbase/monitor/gphoto2"
-  make DESTDIR="$pkgdir" install
+  mv "$srcdir/gphoto2" "$pkgdir/usr"
 }
 
 package_gvfs-mtp() {
   pkgdesc+=" (MTP backend; Android, media player)"
   depends=("gvfs=$pkgver" libmtp)
 
-  cd $pkgbase/daemon
-  install -D .libs/gvfsd-mtp "$pkgdir/usr/lib/gvfs/gvfsd-mtp"
-  install -Dm644 mtp.mount "$pkgdir/usr/share/gvfs/mounts/mtp.mount"
-
-  cd "$srcdir/$pkgbase/monitor/mtp"
-  make DESTDIR="$pkgdir" install
+  mv "$srcdir/mtp" "$pkgdir/usr"
 }
 
 package_gvfs-goa() {
   pkgdesc+=" (Gnome Online Accounts backend; cloud storage)"
   depends=("gvfs=$pkgver" gnome-online-accounts)
 
-  cd "$srcdir/$pkgbase/monitor/goa"
-  make DESTDIR="$pkgdir" install
+  mv "$srcdir/goa" "$pkgdir/usr"
 }
 
 package_gvfs-nfs() {
@@ -140,16 +154,12 @@ package_gvfs-nfs() {
   depends=("gvfs=$pkgver" libnfs)
   install=gvfs-nfs.install
 
-  cd $pkgbase/daemon
-  install -D .libs/gvfsd-nfs "$pkgdir/usr/lib/gvfs/gvfsd-nfs"
-  install -Dm644 nfs.mount "$pkgdir/usr/share/gvfs/mounts/nfs.mount"
+  mv "$srcdir/nfs" "$pkgdir/usr"
 }
 
 package_gvfs-google() {
   pkgdesc+=" (Google Drive backend)"
   depends=("gvfs-goa=$pkgver" libgdata)
 
-  cd $pkgbase/daemon
-  install -D .libs/gvfsd-google "$pkgdir/usr/lib/gvfs/gvfsd-google"
-  install -Dm644 google.mount "$pkgdir/usr/share/gvfs/mounts/google.mount"
+  mv "$srcdir/google" "$pkgdir/usr"
 }
